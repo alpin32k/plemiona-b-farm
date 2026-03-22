@@ -1,6 +1,6 @@
-// ==UserScript==
+﻿// ==UserScript==
 // @name         Plemiona - Atak B Asystent Farmera
-// @version      1.5
+// @version      1.10
 // @description  Automatyczne klikanie przycisków Atak B w Asystencie Farmera
 // @author       Skrypt Plemiona
 // @match        https://pl*.plemiona.pl/game.php*screen=am_farm*
@@ -14,44 +14,109 @@
 (function() {
     'use strict';
 
-    // === KONFIGURACJA ===
-    const CONFIG = {
-        // Opóźnienie między kliknięciami (ms) - unika wykrycia jako bot
-        klikOpóznienie: 400,
-        // Skład JEDNEJ kompozycji ataku (ile jednostek na 1 atak) - 0 = nieużywane
-        // Na tej podstawie liczona jest max. liczba ataków do wysłania
-        // Jednostki: spear, sword, axe, archer, spy, light, marcher, heavy, knight
-        minJednostek: {
-            spear: 0,    // Pikinier
-            sword: 0,    // Miecznik
-            axe: 0,      // Topornik
-            archer: 0,   // Łucznik
-            spy: 1,      // Zwiadowca
-            light: 1,    // Lekki kawalerzysta
-            marcher: 0,  // Łucznik na koniu
-            heavy: 0,    // Ciężki kawalerzysta
-            knight: 0    // Rycerz
-        },
-        // Maksymalny poziom muru - pominij wioski z wyższym murem (0 = wyłączone)
+    const STORAGE_KEY = 'alpine-farmer-gui';
+    const DEFAULT_LAYOUT = {
+        minJednostek: { spear: 0, sword: 0, axe: 0, archer: 0, spy: 1, light: 1, marcher: 0, heavy: 0, knight: 0 },
         maxMur: 0,
-        // Automatycznie uruchom przy załadowaniu strony
+        minSurowiec: { wlaczony: false, wood: 1000, clay: 0, iron: 0 },
         autoStart: false,
-        // Auto-refresh strony gdy autoStart - losowy czas w zakresie (ms)
         autoRefreshWlaczony: true,
-        autoRefreshMs: { 
-            brakJednostek: { min: 60000, max: 300000 },  // 1-5 min gdy brak jednostek
-            poAtaku: { min: 30000, max: 160000 }        // 0.5-2.7 min po wysłaniu
-        },
-        // Pokaż komunikat o uruchomieniu
+        autoRefreshMs: { brakJednostek: { min: 60000, max: 300000 }, poAtaku: { min: 30000, max: 160000 } },
+        klikOpóznienie: 400,
         pokazKomunikat: true
     };
+
+    const UNIT_IDS = ['spear', 'sword', 'axe', 'archer', 'spy', 'light', 'marcher', 'heavy', 'knight'];
+
+    function pobierzMinJednostekZeStrony() {
+        const iconB = document.querySelector('.farm_icon_b, a.farm_icon_b');
+        if (!iconB) return null;
+        const iconRow = iconB.closest('tr');
+        if (!iconRow) return null;
+        const inputRow = iconRow.nextElementSibling;
+        if (!inputRow) return null;
+        let templateId = null;
+        const hiddenId = inputRow.querySelector('input[name^="template["]');
+        if (hiddenId) templateId = hiddenId.value || (hiddenId.name.match(/\[(\d+)\]/) || [])[1];
+        if (!templateId) {
+            const anyUnit = inputRow.querySelector('input[name^="spear["], input[name^="sword["]');
+            if (anyUnit && anyUnit.name) templateId = (anyUnit.name.match(/\[(\d+)\]/) || [])[1];
+        }
+        if (!templateId) return null;
+        const minJednostek = {};
+        let hasAny = false;
+        for (const unitId of UNIT_IDS) {
+            const el = inputRow.querySelector(`input[name="${unitId}[${templateId}]"]`);
+            const val = el ? (parseInt(el.value || '0', 10) || 0) : 0;
+            minJednostek[unitId] = val;
+            if (val > 0) hasAny = true;
+        }
+        return hasAny ? minJednostek : null;
+    }
+
+    function pobierzDaneZeStrony() {
+        const dane = {};
+        const minJedn = pobierzMinJednostekZeStrony();
+        if (minJedn) dane.minJednostek = minJedn;
+        return dane;
+    }
+
+    function getLayoutConfig() {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (raw) {
+                const saved = JSON.parse(raw);
+                return {
+                    ...DEFAULT_LAYOUT,
+                    ...saved,
+                    minJednostek: { ...DEFAULT_LAYOUT.minJednostek, ...(saved.minJednostek || {}) },
+                    autoRefreshMs: { ...DEFAULT_LAYOUT.autoRefreshMs, ...(saved.autoRefreshMs || {}) },
+                    minSurowiec: { ...DEFAULT_LAYOUT.minSurowiec, ...(saved.minSurowiec || {}) }
+                };
+            }
+            const zStrony = pobierzDaneZeStrony();
+            return {
+                ...DEFAULT_LAYOUT,
+                ...zStrony,
+                minJednostek: { ...DEFAULT_LAYOUT.minJednostek, ...(zStrony.minJednostek || {}) }
+            };
+        } catch {
+            const zStrony = pobierzDaneZeStrony();
+            return {
+                ...DEFAULT_LAYOUT,
+                ...zStrony,
+                minJednostek: { ...DEFAULT_LAYOUT.minJednostek, ...(zStrony.minJednostek || {}) }
+            };
+        }
+    }
+
+    function saveLayoutConfig(layout) {
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(layout));
+        } catch (e) { log('Błąd zapisu do localStorage: ' + e.message); }
+    }
+
+    function getRuntimeConfig(key) {
+        const layout = getLayoutConfig();
+        return layout[key];
+    }
+
+    function setRuntimeConfig(key, value) {
+        const layout = getLayoutConfig();
+        if (key === 'minJednostek' && typeof value === 'object') {
+            layout.minJednostek = { ...layout.minJednostek, ...value };
+        } else {
+            layout[key] = value;
+        }
+        saveLayoutConfig(layout);
+    }
 
     function log(msg) {
         console.log('[Atak B Farmer]', msg);
     }
 
     function pokazKomunikat(text, typ = 'info') {
-        if (!CONFIG.pokazKomunikat) return;
+        if (!getRuntimeConfig('pokazKomunikat')) return;
         // Plemiona ma UI.InfoMessage jeśli istnieje
         if (typeof UI !== 'undefined' && UI.InfoMessage) {
             UI.InfoMessage(text, 3000, typ);
@@ -72,19 +137,91 @@
         return isNaN(murLvl) || murLvl < maxLvl;
     }
 
+    function pobierzSurowceZRzedu(row) {
+        const cells = row.querySelectorAll('td');
+        const resCell = cells[5];
+        if (!resCell) return { wood: 0, clay: 0, iron: 0 };
+        const nowraps = resCell.querySelectorAll('.nowrap');
+        const res = (i) => parseInt(nowraps[i]?.querySelector('.res')?.textContent || '0', 10) || 0;
+        return { wood: res(0), clay: res(1), iron: res(2) };
+    }
+
+    function sprawdzMinSurowiec(btnOrRow, cfg) {
+        if (!cfg?.wlaczony) return true;
+        const row = btnOrRow?.closest ? btnOrRow.closest('tr') : btnOrRow;
+        if (!row) return true;
+        const surowce = pobierzSurowceZRzedu(row);
+        for (const typ of ['wood', 'clay', 'iron']) {
+            const minVal = cfg[typ] || 0;
+            if (minVal <= 0) continue;
+            if ((surowce[typ] || 0) < minVal) return false;
+        }
+        return true;
+    }
+
     function pobierzLiczbyJednostek() {
         const jednostki = {};
-        const unitIds = ['spear', 'sword', 'axe', 'archer', 'spy', 'light', 'marcher', 'heavy', 'knight'];
-        for (const unitId of unitIds) {
-            const el = document.getElementById(unitId)
-                || document.querySelector(`input[name="${unitId}"], input[id="unit_input_${unitId}"]`);
-            jednostki[unitId] = el ? parseInt(el.value || el.textContent || '0', 10) : 0;
+        const unitsHome = document.getElementById('units_home');
+        for (const unitId of UNIT_IDS) {
+            let count = 0;
+            if (unitsHome) {
+                const el = unitsHome.querySelector(`#${unitId}, .unit-item-${unitId}`);
+                if (el) {
+                    count = parseInt(el.dataset?.unitCount ?? el.textContent ?? '0', 10) || 0;
+                }
+            } else {
+                const fallback = document.getElementById(unitId) || document.querySelector(`input[name="${unitId}"]`);
+                if (fallback && !fallback.closest('#am-farmer-gui')) {
+                    count = parseInt(fallback.dataset?.unitCount ?? fallback.value ?? fallback.textContent ?? '0', 10) || 0;
+                }
+            }
+            jednostki[unitId] = count;
         }
         return jednostki;
     }
 
+    function aktualizujSzablonB(minJednostek) {
+        if (!minJednostek || typeof minJednostek !== 'object') return 0;
+        const iconB = document.querySelector('.farm_icon_b, a.farm_icon_b');
+        if (!iconB) return 0;
+        const iconRow = iconB.closest('tr');
+        if (!iconRow) return 0;
+        const inputRow = iconRow.nextElementSibling;
+        if (!inputRow) return 0;
+        let templateId = null;
+        const hiddenId = inputRow.querySelector('input[name^="template["]');
+        if (hiddenId) templateId = hiddenId.value || (hiddenId.name.match(/\[(\d+)\]/) || [])[1];
+        if (!templateId) {
+            const anyUnit = inputRow.querySelector(`input[name^="spear["], input[name^="sword["]`);
+            if (anyUnit && anyUnit.name) templateId = (anyUnit.name.match(/\[(\d+)\]/) || [])[1];
+        }
+        if (!templateId) return 0;
+        let zaktualizowane = 0;
+        for (const unitId of UNIT_IDS) {
+            const val = minJednostek[unitId];
+            if (val == null || val < 0) continue;
+            const v = String(Math.max(0, val));
+            const el = inputRow.querySelector(`input[name="${unitId}[${templateId}]"]`);
+            if (el && el.value !== v) {
+                el.value = v;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                zaktualizowane++;
+            }
+        }
+        if (zaktualizowane > 0) {
+            log('Szablon B zaktualizowany (' + zaktualizowane + ' pól, template ' + templateId + ')');
+            const zapiszBtn = inputRow.closest('form')?.querySelector('input[type="submit"][value="Zapisz"], button[type="submit"]');
+            if (zapiszBtn) {
+                zapiszBtn.click();
+                log('Kliknięto Zapisz – wysłano formularz');
+            }
+        }
+        return zaktualizowane;
+    }
+
     function ileKompozycjiMogeWyslac() {
-        const min = CONFIG.minJednostek;
+        const min = getRuntimeConfig('minJednostek');
         const dostepne = pobierzLiczbyJednostek();
         let maxKompozycji = Infinity;
         let maWymagania = false;
@@ -128,16 +265,16 @@
     }
 
     function czyRefreshWlaczony() {
-        if (CONFIG.autoRefreshWlaczony === false) return false;
-        const cfg = CONFIG.autoRefreshMs;
+        if (getRuntimeConfig('autoRefreshWlaczony') === false) return false;
+        const cfg = getRuntimeConfig('autoRefreshMs');
         if (!cfg || typeof cfg !== 'object') return false;
         const brak = cfg.brakJednostek, poAt = cfg.poAtaku;
         return (brak && brak.max > 0) || (poAt && poAt.max > 0);
     }
 
     function zaplanujRefresh(fromAutoStart, typ) {
-        if (!fromAutoStart || CONFIG.autoRefreshWlaczony === false) return 0;
-        const cfg = CONFIG.autoRefreshMs;
+        if (!fromAutoStart || getRuntimeConfig('autoRefreshWlaczony') === false) return 0;
+        const cfg = getRuntimeConfig('autoRefreshMs');
         if (!cfg || typeof cfg !== 'object') return 0;
         const ref = typ === 'poAtaku' ? cfg.poAtaku : cfg.brakJednostek;
         if (!ref || ref.max <= 0) return 0;
@@ -166,7 +303,7 @@
         // Ile kompozycji mogę wysłać (minJednostek = skład 1 ataku)
         let maxKompozycji = ileKompozycjiMogeWyslac();
         if (maxKompozycji <= 0) {
-            const min = CONFIG.minJednostek;
+            const min = getRuntimeConfig('minJednostek');
             for (const [unitId, naAtak] of Object.entries(min)) {
                 if (naAtak <= 0) continue;
                 const dostepne = pobierzLiczbyJednostek();
@@ -181,11 +318,15 @@
             }
         }
 
-        // Zbierz przyciski (mur + limit kompozycji)
+        // Zbierz przyciski (mur + minSurowiec + limit kompozycji)
+        const maxMurVal = getRuntimeConfig('maxMur');
+        const minSurowiecCfg = getRuntimeConfig('minSurowiec');
         const doKlikniecia = [];
         for (let i = 0; i < przyciskiB.length && doKlikniecia.length < maxKompozycji; i++) {
-            if (CONFIG.maxMur > 0 && !sprawdzMur(i, CONFIG.maxMur)) continue;
-            doKlikniecia.push(przyciskiB[i]);
+            const btn = przyciskiB[i];
+            if (maxMurVal > 0 && !sprawdzMur(i, maxMurVal)) continue;
+            if (!sprawdzMinSurowiec(btn, minSurowiecCfg)) continue;
+            doKlikniecia.push(btn);
         }
 
         doKlikniecia.forEach((btn, i) => {
@@ -201,7 +342,7 @@
                 } catch (e) {
                     log('Błąd przy klikaniu: ' + e.message);
                 }
-            }, i * CONFIG.klikOpóznienie);
+            }, i * getRuntimeConfig('klikOpóznienie'));
         });
 
         const msg = maxKompozycji === Infinity
@@ -211,12 +352,12 @@
         log('Zaplanowano ' + doKlikniecia.length + ' kliknięć');
 
         // Auto-refresh po wysłaniu (tylko gdy autoStart)
-        if (fromAutoStart && CONFIG.autoRefreshWlaczony !== false) {
-            const cfg = CONFIG.autoRefreshMs;
+        if (fromAutoStart && getRuntimeConfig('autoRefreshWlaczony') !== false) {
+            const cfg = getRuntimeConfig('autoRefreshMs');
             const ref = cfg && typeof cfg === 'object' ? cfg.poAtaku : null;
             if (ref && ref.max > 0) {
                 const ms = losowyCzasMs(ref);
-                const czasKlikania = doKlikniecia.length * CONFIG.klikOpóznienie;
+                const czasKlikania = doKlikniecia.length * getRuntimeConfig('klikOpóznienie');
                 const totalMs = czasKlikania + ms;
                 log('Odświeżenie po ataku za ' + Math.round(totalMs / 1000) + ' s');
                 setTimeout(() => {
@@ -242,17 +383,15 @@
                 </div>
             </div>
             <div class="am-gui-body">
-                <div class="am-gui-status" id="am-gui-status">Ładowanie...</div>
-                <div class="am-gui-jednostki" id="am-gui-jednostki"></div>
-                <label class="am-gui-check">
-                    <input type="checkbox" id="am-gui-autostart" ${CONFIG.autoStart ? 'checked' : ''}>
-                    Auto-start przy załadowaniu
-                </label>
-                <label class="am-gui-check" id="am-gui-autorefresh-label">
-                    <input type="checkbox" id="am-gui-autorefresh" ${czyRefreshWlaczony() ? 'checked' : ''}>
-                    Auto-refresh (losowo: brak jed. / po ataku)
-                </label>
-                <button type="button" class="am-gui-start" id="am-gui-start">▶ START</button>
+                <div class="am-gui-tabs" id="am-gui-tabs"></div>
+                <div class="am-gui-tab-panels" id="am-gui-tab-panels">
+                    <div class="am-gui-tab-panel" id="am-gui-panel-main">
+                        <div class="am-gui-status" id="am-gui-status">Ładowanie...</div>
+                        <div class="am-gui-jednostki" id="am-gui-jednostki"></div>
+                        <button type="button" class="am-gui-start" id="am-gui-start">▶ START</button>
+                    </div>
+                    <div class="am-gui-tab-panel am-gui-hidden" id="am-gui-panel-config"></div>
+                </div>
                 <details class="am-gui-info">
                     <summary>ℹ️ Jak zaakceptować bota?</summary>
                     <div class="am-gui-info-content">
@@ -329,21 +468,25 @@
             }
             .am-gui-toggle:hover { background: rgba(139,105,20,0.3); }
             .am-gui-body {
-                padding: 12px;
+                padding: 14px;
                 display: flex;
                 flex-direction: column;
-                gap: 10px;
+                gap: 12px;
             }
+            .am-gui-tab-panels { display: flex; flex-direction: column; gap: 12px; }
+            .am-gui-panel-main { display: flex; flex-direction: column; gap: 12px; }
             .am-gui-status {
                 font-size: 12px;
                 color: #c4a35a;
                 min-height: 18px;
+                margin-bottom: 2px;
             }
             .am-gui-jednostki {
                 font-size: 11px;
                 display: flex;
                 flex-direction: column;
-                gap: 2px;
+                gap: 4px;
+                line-height: 1.4;
             }
             .am-gui-unit-ok { color: #6b9c2e; }
             .am-gui-unit-brak { color: #c44; }
@@ -378,9 +521,9 @@
             .am-gui-info {
                 font-size: 11px;
                 color: #b8a070;
-                border-top: 1px solid rgba(139,105,20,0.5);
-                padding-top: 8px;
-                margin-top: 4px;
+                border-top: 1px solid rgba(139,105,20,0.4);
+                padding-top: 10px;
+                margin-top: 8px;
             }
             .am-gui-info summary {
                 cursor: pointer;
@@ -403,6 +546,83 @@
                 color: #c4a35a;
                 margin-top: 8px !important;
             }
+            .am-gui-tabs { display: none; gap: 6px; margin-bottom: 10px; }
+            .am-gui-tabs.visible { display: flex; }
+            .am-gui-tab {
+                flex: 1; padding: 6px 8px; font-size: 11px;
+                background: rgba(0,0,0,0.3); border: 1px solid #8b6914;
+                color: #e8d5b5; cursor: pointer; border-radius: 4px;
+            }
+            .am-gui-tab:hover { background: rgba(139,105,20,0.3); }
+            .am-gui-tab.active { background: rgba(139,105,20,0.5); font-weight: bold; }
+            .am-gui-tab-panel.am-gui-hidden { display: none !important; }
+            #am-gui-panel-config {
+                max-height: 400px;
+                overflow-y: auto;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                padding-right: 2px;
+            }
+            #am-gui-panel-config::-webkit-scrollbar { width: 6px; }
+            #am-gui-panel-config::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 3px; }
+            #am-gui-panel-config::-webkit-scrollbar-thumb { background: rgba(139,105,20,0.5); border-radius: 3px; }
+            .am-gui-config-section {
+                font-size: 11px;
+                padding: 10px 0;
+                border-bottom: 1px solid rgba(139,105,20,0.25);
+            }
+            .am-gui-config-section:last-of-type { border-bottom: none; }
+            .am-gui-config-section strong { display: block; margin: 8px 0 4px; color: #c4a35a; font-size: 11px; }
+            .am-gui-config-section strong:first-child { margin-top: 0; }
+            .am-gui-config-section .am-gui-config-row { margin: 6px 0; }
+            .am-gui-config-section .am-gui-check { margin: 8px 0; }
+            .am-gui-config-section .am-gui-check:first-child { margin-top: 0; }
+            .am-gui-config-details {
+                font-size: 11px;
+                border: 1px solid rgba(139,105,20,0.35);
+                border-radius: 6px;
+                padding: 0;
+                margin: 4px 0;
+            }
+            .am-gui-config-details summary {
+                padding: 8px 10px;
+                cursor: pointer;
+                color: #c4a35a;
+                font-weight: bold;
+                list-style: none;
+                user-select: none;
+            }
+            .am-gui-config-details summary::-webkit-details-marker { display: none; }
+            .am-gui-config-details summary::after { content: " ▾"; font-size: 10px; opacity: 0.7; }
+            .am-gui-config-details[open] summary::after { content: " ▴"; }
+            .am-gui-config-details summary:hover { color: #e8d5b5; background: rgba(139,105,20,0.15); }
+            .am-gui-config-details-inner {
+                padding: 8px 10px 10px;
+                border-top: 1px solid rgba(139,105,20,0.25);
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+            }
+            .am-gui-config-details-inner strong { margin: 6px 0 2px; font-size: 10px; }
+            .am-gui-config-row {
+                display: flex; justify-content: space-between; align-items: center;
+                margin: 4px 0; font-size: 11px; gap: 8px;
+            }
+            .am-gui-input-num { width: 68px; padding: 4px 6px; background: #2a1f16; border: 1px solid #8b6914; color: #e8d5b5; border-radius: 4px; flex-shrink: 0; }
+            .am-gui-config-row select { min-width: 90px; }
+            .am-gui-zapisz {
+                margin-top: 6px;
+                padding: 8px 14px;
+                background: linear-gradient(180deg, #4a5a2e 0%, #3a4a1e 100%);
+                border: 1px solid #8b6914;
+                color: #e8d5b5;
+                font-size: 12px;
+                border-radius: 6px;
+                cursor: pointer;
+                align-self: flex-start;
+            }
+            .am-gui-zapisz:hover { background: linear-gradient(180deg, #5a6a3e 0%, #4a5a2e 100%); }
         `;
         document.head.appendChild(style);
         document.body.appendChild(panel);
@@ -422,13 +642,13 @@
             if (przyciski.length === 0) {
                 statusEl.textContent = 'Brak ataków B na tej stronie';
             } else if (kompozycje < przyciski.length) {
-                statusEl.textContent = `Dostępnych ataków B: ${dostepnych} (z ${przyciski.length} – limit jednostek)`;
+                statusEl.textContent = `Dostępnych ataków B: ${dostepnych}/${przyciski.length}`;
             } else {
                 statusEl.textContent = `Dostępnych ataków B: ${dostepnych}`;
             }
             // Lista jednostek: nazwa: kompozycji (mam/naAtak)
             if (jednostkiEl) {
-                const min = CONFIG.minJednostek;
+                const min = getRuntimeConfig('minJednostek');
                 const dostepne = pobierzLiczbyJednostek();
                 let html = '';
                 for (const [unitId, naAtak] of Object.entries(min)) {
@@ -443,22 +663,117 @@
             }
         }
         odswiezStatus();
-        setInterval(odswiezStatus, 2000);
+        setInterval(odswiezStatus, 1000);
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') odswiezStatus(); });
+        const obsTarget = document.getElementById('units_home') || document.getElementById('plunder_list');
+        if (obsTarget) {
+            try {
+                let debounce = 0;
+                const mo = new MutationObserver(() => {
+                    clearTimeout(debounce);
+                    debounce = setTimeout(odswiezStatus, 150);
+                });
+                mo.observe(obsTarget, { childList: true, subtree: true, characterData: true });
+            } catch (_) {}
+        }
 
         // Toggle collapse
         panel.querySelector('.am-gui-toggle').onclick = () => {
             panel.classList.toggle('am-gui-collapsed');
         };
 
-        // Auto-start checkbox
-        const autostartChk = document.getElementById('am-gui-autostart');
-        autostartChk.onchange = () => CONFIG.autoStart = autostartChk.checked;
+        // Tabs + config panel – zawsze widoczne
+        const tabsEl = document.getElementById('am-gui-tabs');
+        const panelMain = document.getElementById('am-gui-panel-main');
+        const panelConfig = document.getElementById('am-gui-panel-config');
+        const layout = getLayoutConfig();
+            const unitIds = ['spear', 'sword', 'axe', 'archer', 'spy', 'light', 'marcher', 'heavy', 'knight'];
+            const unitNames = { spear: 'Pikinier', sword: 'Miecznik', axe: 'Topornik', archer: 'Łucznik', spy: 'Zwiadowca', light: 'Lekka Kawaleria', marcher: 'Łucznik na koniu', heavy: 'Ciężki Kawalerzysta', knight: 'Rycerz' };
+            const arMs = layout.autoRefreshMs || {};
+            const arBra = arMs.brakJednostek || {};
+            const arPo = arMs.poAtaku || {};
 
-        // Auto-refresh checkbox
-        const autorefreshChk = document.getElementById('am-gui-autorefresh');
-        if (autorefreshChk) autorefreshChk.onchange = () => {
-            CONFIG.autoRefreshWlaczony = autorefreshChk.checked;
-        };
+            tabsEl.innerHTML = '<button type="button" class="am-gui-tab active" data-tab="main">Główny</button><button type="button" class="am-gui-tab" data-tab="config">⚙️ Konfiguracja</button>';
+            tabsEl.classList.add('visible');
+
+            panelConfig.innerHTML = `
+                <div class="am-gui-config-section">
+                    <label class="am-gui-check"><input type="checkbox" id="am-gui-autostart" ${layout.autoStart ? 'checked' : ''}> Auto-start przy załadowaniu</label>
+                    <label class="am-gui-check"><input type="checkbox" id="am-gui-autorefresh" ${layout.autoRefreshWlaczony !== false ? 'checked' : ''}> Auto-refresh (losowo)</label>
+                </div>
+                <div class="am-gui-config-section">
+                    <label class="am-gui-config-row"><span>Max mur (0=wył.):</span><input type="number" id="am-gui-maxmur" min="0" value="${layout.maxMur || 0}" class="am-gui-input-num"></label>
+                    <label class="am-gui-config-row"><span>Opóźnienie klik (ms):</span><input type="number" id="am-gui-klik" min="100" value="${layout.klikOpóznienie || 400}" class="am-gui-input-num"></label>
+                    <label class="am-gui-check"><input type="checkbox" id="am-gui-pokaz" ${layout.pokazKomunikat ? 'checked' : ''}> Pokaż komunikaty</label>
+                </div>
+                <details class="am-gui-config-details" open>
+                    <summary>⚔️ Jednostki na atak</summary>
+                    <div class="am-gui-config-details-inner">
+                        ${unitIds.map(u => `<label class="am-gui-config-row"><span>${unitNames[u] || u}:</span><input type="number" id="am-gui-min-${u}" min="0" value="${layout.minJednostek[u] || 0}" class="am-gui-input-num"></label>`).join('')}
+                    </div>
+                </details>
+                <details class="am-gui-config-details">
+                    <summary>🔄 Auto-refresh – zakresy (ms)</summary>
+                    <div class="am-gui-config-details-inner">
+                        <strong>Brak jednostek</strong>
+                        <label class="am-gui-config-row"><span>Min:</span><input type="number" id="am-gui-ar-brak-min" min="0" value="${arBra.min || 60000}" class="am-gui-input-num"></label>
+                        <label class="am-gui-config-row"><span>Max:</span><input type="number" id="am-gui-ar-brak-max" min="0" value="${arBra.max || 300000}" class="am-gui-input-num"></label>
+                        <strong>Po ataku</strong>
+                        <label class="am-gui-config-row"><span>Min:</span><input type="number" id="am-gui-ar-po-min" min="0" value="${arPo.min || 30000}" class="am-gui-input-num"></label>
+                        <label class="am-gui-config-row"><span>Max:</span><input type="number" id="am-gui-ar-po-max" min="0" value="${arPo.max || 160000}" class="am-gui-input-num"></label>
+                    </div>
+                </details>
+                <details class="am-gui-config-details">
+                    <summary>📦 Min. surowiec (filtr wiosek)</summary>
+                    <div class="am-gui-config-details-inner">
+                        <label class="am-gui-check"><input type="checkbox" id="am-gui-minsurowiec-wlacz" ${(layout.minSurowiec?.wlaczony) ? 'checked' : ''}> Włącz filtr</label>
+                        <label class="am-gui-config-row"><span>Drewno:</span><input type="number" id="am-gui-minsurowiec-wood" min="0" value="${layout.minSurowiec?.wood ?? 1000}" class="am-gui-input-num"></label>
+                        <label class="am-gui-config-row"><span>Glina:</span><input type="number" id="am-gui-minsurowiec-clay" min="0" value="${layout.minSurowiec?.clay ?? 0}" class="am-gui-input-num"></label>
+                        <label class="am-gui-config-row"><span>Żelazo:</span><input type="number" id="am-gui-minsurowiec-iron" min="0" value="${layout.minSurowiec?.iron ?? 0}" class="am-gui-input-num"></label>
+                    </div>
+                </details>
+                <button type="button" class="am-gui-zapisz" id="am-gui-zapisz">💾 Zapisz i zastosuj do szablonu B</button>
+            `;
+
+            tabsEl.querySelectorAll('.am-gui-tab').forEach(btn => {
+                btn.onclick = () => {
+                    tabsEl.querySelectorAll('.am-gui-tab').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    const tab = btn.dataset.tab;
+                    panelMain.classList.toggle('am-gui-hidden', tab !== 'main');
+                    panelConfig.classList.toggle('am-gui-hidden', tab !== 'config');
+                    if (tab === 'main') odswiezStatus();
+                };
+            });
+
+            function zapiszZConfigu(pokazMsg = false) {
+                const l = { minJednostek: {}, maxMur: 0, minSurowiec: { wlaczony: false, wood: 1000, clay: 0, iron: 0 }, klikOpóznienie: 400, autoRefreshMs: {}, pokazKomunikat: true, autoStart: false, autoRefreshWlaczony: true };
+                l.autoStart = document.getElementById('am-gui-autostart')?.checked === true;
+                l.autoRefreshWlaczony = document.getElementById('am-gui-autorefresh')?.checked !== false;
+                unitIds.forEach(u => { l.minJednostek[u] = parseInt(document.getElementById('am-gui-min-' + u)?.value || '0', 10) || 0; });
+                l.maxMur = parseInt(document.getElementById('am-gui-maxmur')?.value || '0', 10) || 0;
+                l.minSurowiec = {
+                    wlaczony: document.getElementById('am-gui-minsurowiec-wlacz')?.checked === true,
+                    wood: parseInt(document.getElementById('am-gui-minsurowiec-wood')?.value || '1000', 10) || 0,
+                    clay: parseInt(document.getElementById('am-gui-minsurowiec-clay')?.value || '0', 10) || 0,
+                    iron: parseInt(document.getElementById('am-gui-minsurowiec-iron')?.value || '0', 10) || 0
+                };
+                l.klikOpóznienie = Math.max(100, parseInt(document.getElementById('am-gui-klik')?.value || '400', 10)) || 400;
+                l.autoRefreshMs = {
+                    brakJednostek: { min: parseInt(document.getElementById('am-gui-ar-brak-min')?.value || '60000', 10) || 60000, max: parseInt(document.getElementById('am-gui-ar-brak-max')?.value || '300000', 10) || 300000 },
+                    poAtaku: { min: parseInt(document.getElementById('am-gui-ar-po-min')?.value || '30000', 10) || 30000, max: parseInt(document.getElementById('am-gui-ar-po-max')?.value || '160000', 10) || 160000 }
+                };
+                l.pokazKomunikat = document.getElementById('am-gui-pokaz')?.checked !== false;
+                saveLayoutConfig({ ...getLayoutConfig(), ...l });
+                const n = aktualizujSzablonB(l.minJednostek);
+                if (pokazMsg && n > 0) pokazKomunikat('Konfiguracja zapisana. Szablon B zaktualizowany (' + n + ' pól).');
+            }
+            const zapiszBtn = document.getElementById('am-gui-zapisz');
+            if (zapiszBtn) zapiszBtn.onclick = () => zapiszZConfigu(true);
+            panelConfig.querySelectorAll('input, select').forEach(inp => {
+                inp.addEventListener('change', zapiszZConfigu);
+                if (inp.tagName === 'INPUT') inp.addEventListener('blur', zapiszZConfigu);
+            });
 
         // Start button
         const startBtn = document.getElementById('am-gui-start');
@@ -519,18 +834,19 @@
                 guiPokazane = true;
                 clearInterval(checkReady);
                 pokazGUI();
-                if (CONFIG.autoStart) {
+                setTimeout(() => aktualizujSzablonB(getRuntimeConfig('minJednostek')), 500);
+                if (getRuntimeConfig('autoStart')) {
                     if (plunderList.querySelector('a.farm_icon_b')) {
                         setTimeout(() => startujKlikanie(true), 1000);
                     } else if (czyRefreshWlaczony()) {
-                        const cfg = CONFIG.autoRefreshMs;
+                        const cfg = getRuntimeConfig('autoRefreshMs');
                         const ref = cfg && cfg.brakJednostek ? cfg.brakJednostek : null;
                         const ms = ref && ref.max > 0 ? losowyCzasMs(ref) : 60000;
                         pokazKomunikat('Brak ataków B. Odświeżenie za ' + Math.round(ms / 1000) + ' s...', 'error');
                         setTimeout(() => location.reload(), ms);
                         pokazCountdown(ms, 'brakJednostek');
                     }
-                } else if (!CONFIG.autoStart) {
+                } else if (!getRuntimeConfig('autoStart')) {
                     pokazKomunikat('Skrypt gotowy. Użyj przycisku START.');
                 }
             }

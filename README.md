@@ -17,23 +17,24 @@ Skrypt automatycznie klika przyciski **Atak B** na stronie Asystenta Farmera w g
 ## Użycie
 
 - **Panel GUI** w prawym dolnym rogu: status, lista jednostek, przycisk **START**
-- **Auto-start**: skrypt sam rozpoczyna wysyłanie po ~1 s od załadowania (gdy włączone)
+- Zakładka **⚙️ Konfiguracja** – jednostki na atak, max mur, opóźnienie, auto-refresh itd. Ustawienia zapisywane w localStorage. Przy pierwszym uruchomieniu (bez zapisanej konfiguracji) skrypt używa danych z szablonu B na stronie; brakujące wartości – z domyślnych ustawień
+- **Auto-start**: skrypt sam rozpoczyna wysyłanie po ~1 s od załadowania (gdy włączone w GUI)
 - **Ręczne**: kliknij **START**, aby wysłać ataki
 - **Countdown** w prawym górnym rogu panelu pokazuje czas do odświeżenia (po najechaniu: typ – brak jednostek / po ataku)
 
 ## Konfiguracja
 
-W pliku `atak-b-farmer.user.js` w sekcji `CONFIG`:
+**Cała konfiguracja odbywa się w GUI** (zakładka ⚙️ Konfiguracja). Przy braku zapisu w localStorage skrypt korzysta z danych ze strony (szablon B), a brakujące ustawienia bierze z wartości domyślnych.
 
 | Opcja | Opis | Domyślna |
 |-------|------|----------|
-| `klikOpóznienie` | Opóźnienie między kliknięciami (ms) | 400 |
-| `minJednostek` | Skład **jednej** kompozycji ataku (ile jednostek na 1 atak). 0 = nieużywane | – |
-| `maxMur` | Pomiń wioski z murem powyżej poziomu (0 = wyłączone) | 0 |
-| `autoStart` | Auto-start przy załadowaniu strony | false |
-| `autoRefreshWlaczony` | Włącz auto-refresh strony | true |
-| `autoRefreshMs` | Zakresy losowego czasu odświeżenia (ms) | patrz poniżej |
-| `pokazKomunikat` | Pokaż komunikaty w grze | true |
+| Jednostki na atak | Skład jednej kompozycji ataku (0 = nieużywane) | spy: 1, light: 1 |
+| Max mur | Pomiń wioski z murem powyżej poziomu (0 = wył.) | 0 |
+| Opóźnienie klik (ms) | Opóźnienie między kliknięciami | 400 |
+| Auto-start | Uruchom przy załadowaniu strony | false |
+| Auto-refresh | Odświeżenie strony (brak jed. / po ataku) | włączone |
+| Auto-refresh – zakresy (ms) | Min/max czasu odświeżenia | patrz poniżej |
+| Pokaż komunikaty | Komunikaty w grze | true |
 
 ### minJednostek (skład ataku)
 
