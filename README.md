@@ -1,6 +1,6 @@
 # Skrypt Atak B - Asystent Farmera Plemiona
 
-Skrypt automatycznie klika przyciski **Atak B** na stronie Asystenta Farmera w grze Plemiona. Liczy dostępne kompozycje ataków na podstawie jednostek i ogranicza wysyłanie, aby nie spamować zapytaniami.
+Skrypt automatycznie klika przyciski **Atak B** na stronie Asystenta Farmera w grze Plemiona. Liczy dostępne kompozycje ataków na podstawie jednostek, filtruje wioski po surowcach i odległości, ogranicza wysyłanie, aby nie spamować zapytaniami.
 
 ## Instalacja
 
@@ -16,24 +16,26 @@ Skrypt automatycznie klika przyciski **Atak B** na stronie Asystenta Farmera w g
 
 ## Użycie
 
-- **Panel GUI** w prawym dolnym rogu: status, lista jednostek, przycisk **START**
-- Zakładka **⚙️ Konfiguracja** – jednostki na atak, max mur, opóźnienie, auto-refresh itd. Ustawienia zapisywane w localStorage. Przy pierwszym uruchomieniu (bez zapisanej konfiguracji) skrypt używa danych z szablonu B na stronie; brakujące wartości – z domyślnych ustawień
-- **Auto-start**: skrypt sam rozpoczyna wysyłanie po ~1 s od załadowania (gdy włączone w GUI)
-- **Ręczne**: kliknij **START**, aby wysłać ataki
-- **Countdown** w prawym górnym rogu panelu pokazuje czas do odświeżenia (po najechaniu: typ – brak jednostek / po ataku)
+- **Panel GUI** w prawym dolnym rogu: status, lista jednostek, filtry (max mur, min. surowce), liczba wiosek, przycisk **START**
+- Zakładka **⚙️ Konfiguracja** – jednostki na atak, max mur, min. surowce (tryb i wartości), opóźnienie, auto-refresh. Ustawienia zapisywane w `localStorage`. Przy pierwszym uruchomieniu skrypt pobiera dane z szablonu B ze strony.
+- **Auto-start** – skrypt sam rozpoczyna wysyłanie po ~1 s od załadowania (gdy włączone w GUI)
+- **Ręczne** – kliknij **START**, aby wysłać ataki
+- **Countdown** – czas do odświeżenia strony (najechanie: typ – brak jednostek / brak surowców / po ataku)
 
 ## Konfiguracja
 
-**Cała konfiguracja odbywa się w GUI** (zakładka ⚙️ Konfiguracja). Przy braku zapisu w localStorage skrypt korzysta z danych ze strony (szablon B), a brakujące ustawienia bierze z wartości domyślnych.
+**Cała konfiguracja odbywa się w GUI** (zakładka ⚙️ Konfiguracja). Przy braku zapisu w localStorage skrypt korzysta z danych ze strony (szablon B), a brakujące wartości z domyślnych.
 
 | Opcja | Opis | Domyślna |
 |-------|------|----------|
 | Jednostki na atak | Skład jednej kompozycji ataku (0 = nieużywane) | spy: 1, light: 1 |
 | Max mur | Pomiń wioski z murem powyżej poziomu (0 = wył.) | 0 |
+| Min. surowce | Filtr wiosek po drewnie, glinie, żelazie | wyłączony |
+| Tryb filtra surowców | Ścisły / Priorytetowy / Najwięcej | Ścisły |
 | Opóźnienie klik (ms) | Opóźnienie między kliknięciami | 400 |
 | Auto-start | Uruchom przy załadowaniu strony | false |
-| Auto-refresh | Odświeżenie strony (brak jed. / po ataku) | włączone |
-| Auto-refresh – zakresy (ms) | Min/max czasu odświeżenia | patrz poniżej |
+| Auto-refresh | Odświeżenie strony | włączone |
+| Auto-refresh – zakresy (ms) | Min/max czasu dla każdego typu | patrz poniżej |
 | Pokaż komunikaty | Komunikaty w grze | true |
 
 ### minJednostek (skład ataku)
@@ -56,22 +58,35 @@ minJednostek: {
 
 Przykład: masz 10 zwiadowców i 5 LK, skład `spy: 1, light: 1` → max 5 kompozycji (ogranicza LK).
 
+### Filtr min. surowców
+
+Ustaw minimalne drewno, glinę i żelazo w wiosce (według ostatniego raportu zwiadowców). Dla danego surowca wartość 0 oznacza brak wymogu.
+
+**Tryby:**
+- **Ścisły** – atakuj tylko wioski spełniające limity. Brak takich wiosek → komunikat o błędzie + odświeżenie strony (zakres `brakSurowcow`).
+- **Priorytetowy** – priorytet wiosek spełniających limity. Jeśli brak – wysyła ataki do wszystkich wiosek (jak bez filtra).
+- **Najwięcej** – sortuje wioski po „bogactwie” (suma actual/min dla każdego surowca) i atakuje najbogatsze jako pierwsze.
+
 ### autoRefreshMs
 
-Losowy czas odświeżenia strony przy włączonym auto-start:
+Losowy czas odświeżenia strony:
 
 | Klucz | Opis | Domyślna |
 |-------|------|----------|
-| `brakJednostek` | Gdy brak jednostek lub przycisków B (min–max ms) | 60 000 – 300 000 (1–5 min) |
-| `poAtaku` | Po wysłaniu ataków (min–max ms) | 30 000 – 160 000 (0.5–2.7 min) |
+| `brakJednostek` | Gdy brak jednostek lub przycisków B | 60 000 – 300 000 (1–5 min) |
+| `brakSurowcow` | Gdy filtr surowców włączony i brak wiosek spełniających (tryb ścisły) | 60 000 – 300 000 |
+| `poAtaku` | Po wysłaniu ataków | 30 000 – 160 000 (0.5–2.7 min) |
 
 ## Funkcje
 
 - **Limit kompozycji** – wysyła tylko tyle ataków, ile pozwala skład jednostek
 - **Lista jednostek** – status (zielono/czerwono): np. `Zwiadowca: 10 (10/1)`
-- **Auto-refresh** – odświeża stronę po wysłaniu lub gdy brak jednostek; czas losowy z zakresu
-- **Countdown** – widoczny czas do odświeżenia w headerze panelu
-- **Pomijanie muru** – opcjonalne pomijanie wiosek z za wysokim murem
+- **Filtr max mur** – pomija wioski z murem powyżej ustawionego poziomu
+- **Filtr min. surowce** – trzy tryby: ścisły, priorytetowy, najwięcej
+- **Liczba wiosek** – w panelu głównym: `(X/Y wiosek)` – ile spełnia filtry spośród wszystkich
+- **Auto-refresh** – odświeża stronę po wysłaniu, przy braku jednostek lub braku wiosek z surowcami; czas losowy z zakresu
+- **Countdown** – czas do odświeżenia w headerze panelu
+- **DEBUG** – ustaw `const DEBUG = true` na początku pliku, aby w konsoli widzieć szczegóły (wioska, koordynaty, surowce, odległość, config)
 
 ## Uwagi
 

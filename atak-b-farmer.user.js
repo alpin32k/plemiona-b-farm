@@ -1,4 +1,4 @@
-﻿// ==UserScript==
+// ==UserScript==
 // @name         Plemiona - Atak B Asystent Farmera
 // @version      1.10
 // @description  Automatyczne klikanie przycisków Atak B w Asystencie Farmera
@@ -14,14 +14,16 @@
 (function() {
     'use strict';
 
+    const DEBUG = true;
+
     const STORAGE_KEY = 'alpine-farmer-gui';
     const DEFAULT_LAYOUT = {
         minJednostek: { spear: 0, sword: 0, axe: 0, archer: 0, spy: 1, light: 1, marcher: 0, heavy: 0, knight: 0 },
         maxMur: 0,
-        minSurowiec: { wlaczony: false, wood: 1000, clay: 0, iron: 0 },
+        minSurowiec: { wlaczony: false, tryb: 'scisly', wood: 1000, clay: 0, iron: 0 },
         autoStart: false,
         autoRefreshWlaczony: true,
-        autoRefreshMs: { brakJednostek: { min: 60000, max: 300000 }, poAtaku: { min: 30000, max: 160000 } },
+        autoRefreshMs: { brakJednostek: { min: 60000, max: 300000 }, poAtaku: { min: 30000, max: 160000 }, brakSurowcow: { min: 60000, max: 300000 } },
         klikOpóznienie: 400,
         pokazKomunikat: true
     };
@@ -138,19 +140,126 @@
     }
 
     function pobierzSurowceZRzedu(row) {
+        if (!row) return null;
         const cells = row.querySelectorAll('td');
-        const resCell = cells[5];
-        if (!resCell) return { wood: 0, clay: 0, iron: 0 };
-        const nowraps = resCell.querySelectorAll('.nowrap');
-        const res = (i) => parseInt(nowraps[i]?.querySelector('.res')?.textContent || '0', 10) || 0;
-        return { wood: res(0), clay: res(1), iron: res(2) };
+        // Szukaj komórki z surowcami – może być cells[4], cells[5] lub inny indeks; Plemiona używa .res w .nowrap
+        for (let idx = 0; idx < cells.length; idx++) {
+            const cell = cells[idx];
+            const nowraps = cell?.querySelectorAll?.('.nowrap');
+            if (!nowraps || nowraps.length < 2) continue;
+            const resVal = (i) => parseInt(nowraps[i]?.querySelector?.('.res')?.textContent || '0', 10) || 0;
+            return { wood: resVal(0), clay: resVal(1), iron: resVal(2) };
+        }
+        return null;
+    }
+
+    const RES_ICONS = {
+        wood: 'https://dspl.innogamescdn.com/asset/2fe6656b/graphic/holz.webp',
+        clay: 'https://dspl.innogamescdn.com/asset/2fe6656b/graphic/lehm.webp',
+        iron: 'https://dspl.innogamescdn.com/asset/2fe6656b/graphic/eisen.webp'
+    };
+
+    function formatMinSurowiecTekst(cfg) {
+        if (!cfg?.wlaczony) return '';
+        const parts = [];
+        if ((cfg.wood || 0) > 0) parts.push('min. ' + cfg.wood + ' drewna');
+        if ((cfg.clay || 0) > 0) parts.push('min. ' + cfg.clay + ' gliny');
+        if ((cfg.iron || 0) > 0) parts.push('min. ' + cfg.iron + ' żelaza');
+        return parts.join(', ');
+    }
+
+    function ileWiosekPasujeDoFiltrow() {
+        const przyciski = document.querySelectorAll('#plunder_list a.farm_icon_b');
+        const maxMurVal = getRuntimeConfig('maxMur');
+        const minSurowiecCfg = getRuntimeConfig('minSurowiec');
+        const tryb = minSurowiecCfg?.tryb || 'scisly';
+        const najwiecejWlaczony = minSurowiecCfg?.wlaczony && tryb === 'najwiecej';
+        let count = 0;
+        for (let i = 0; i < przyciski.length; i++) {
+            const btn = przyciski[i];
+            if (maxMurVal > 0 && !sprawdzMur(i, maxMurVal)) continue;
+            if (najwiecejWlaczony) { count++; continue; }
+            if (!sprawdzMinSurowiec(btn, minSurowiecCfg)) continue;
+            count++;
+        }
+        return { count, total: przyciski.length };
+    }
+
+    function formatMinSurowiecHtml(cfg) {
+        if (!cfg?.wlaczony) return '';
+        const names = { wood: 'drewna', clay: 'gliny', iron: 'żelaza' };
+        const parts = [];
+        for (const typ of ['wood', 'clay', 'iron']) {
+            const val = cfg[typ] || 0;
+            if (val <= 0) continue;
+            const url = RES_ICONS[typ];
+            const icon = url ? `<img src="${url}" alt="" class="am-gui-res-icon">` : '';
+            const title = 'min. ' + val + ' ' + (names[typ] || typ);
+            parts.push('<span class="am-gui-res-item" title="' + title + '">' + icon + '</span>');
+        }
+        return parts.join(' ');
+    }
+
+    function pobierzSurowceDlaPrzycisku(btn) {
+        if (!btn?.closest) return null;
+        let row = btn.closest('tr');
+        let surowce = pobierzSurowceZRzedu(row);
+        if (!surowce && row?.previousElementSibling) surowce = pobierzSurowceZRzedu(row.previousElementSibling);
+        return surowce;
+    }
+
+    function pobierzInfoWioski(btn) {
+        const row = btn?.closest?.('tr');
+        if (!row) return { nazwa: '?', coords: null, surowce: null, odleglosc: null };
+        const cells = row.querySelectorAll('td');
+        let nazwa = '?';
+        let coords = null;
+        const wioskaTd = cells[3] || row.querySelector('td:nth-child(4)');
+        if (wioskaTd) {
+            const link = wioskaTd.querySelector('a[href*="report"]');
+            const txt = (link ? link.textContent : wioskaTd.textContent || '').trim();
+            const coordMatch = txt.match(/[(\[]?\s*(\d{1,4})\s*[|:]\s*(\d{1,4})\s*[)\]]?/);
+            if (coordMatch) coords = { x: parseInt(coordMatch[1], 10), y: parseInt(coordMatch[2], 10) };
+            if (txt && txt.length > 2) nazwa = txt;
+        }
+        let odleglosc = null;
+        const odlTd = cells[7] || row.querySelector('td:nth-child(9)');
+        if (odlTd) {
+            const d = parseFloat((odlTd.textContent || '').replace(',', '.').trim());
+            if (!isNaN(d)) odleglosc = d;
+        }
+        const surowce = pobierzSurowceDlaPrzycisku(btn);
+        if (odleglosc == null && coords && typeof Game !== 'undefined' && Game?.village) {
+            const myX = Game.village.x, myY = Game.village.y;
+            if (myX != null && myY != null) odleglosc = Math.max(Math.abs(coords.x - myX), Math.abs(coords.y - myY));
+        }
+        return { nazwa, coords, surowce, odleglosc };
+    }
+
+    function scoreWioskiSurowce(btn, cfg) {
+        if (!cfg?.wlaczony) return 0;
+        const surowce = pobierzSurowceDlaPrzycisku(btn);
+        if (!surowce) return 0;
+        let score = 0;
+        for (const typ of ['wood', 'clay', 'iron']) {
+            const minVal = cfg[typ] || 0;
+            if (minVal <= 0) continue;
+            const actual = surowce[typ] || 0;
+            score += actual / minVal;
+        }
+        return score;
     }
 
     function sprawdzMinSurowiec(btnOrRow, cfg) {
         if (!cfg?.wlaczony) return true;
-        const row = btnOrRow?.closest ? btnOrRow.closest('tr') : btnOrRow;
+        let row = btnOrRow?.closest ? btnOrRow.closest('tr') : btnOrRow;
         if (!row) return true;
-        const surowce = pobierzSurowceZRzedu(row);
+        // Przycisk B może być w wierszu z inputami – surowce są często w poprzednim wierszu (główny wiersz wioski)
+        let surowce = pobierzSurowceZRzedu(row);
+        if (!surowce && row.previousElementSibling) {
+            surowce = pobierzSurowceZRzedu(row.previousElementSibling);
+        }
+        if (!surowce) return true; // Nie udało się odczytać – przepuść (nie blokuj ataków)
         for (const typ of ['wood', 'clay', 'iron']) {
             const minVal = cfg[typ] || 0;
             if (minVal <= 0) continue;
@@ -241,7 +350,8 @@
         const el = document.getElementById('am-gui-countdown');
         if (!el) return;
         if (countdownIntervalId) clearInterval(countdownIntervalId);
-        const typLabel = typ === 'poAtaku' ? 'Po ataku' : 'Brak jednostek';
+        const typLabels = { poAtaku: 'Po ataku', brakJednostek: 'Brak jednostek', brakSurowcow: 'Brak wiosek z surowcami' };
+        const typLabel = typLabels[typ] || typ;
         el.title = 'Odświeżenie: ' + typLabel;
         el.textContent = 'Odśw. za ' + Math.ceil(ms / 1000) + 's';
         el.style.display = '';
@@ -268,18 +378,19 @@
         if (getRuntimeConfig('autoRefreshWlaczony') === false) return false;
         const cfg = getRuntimeConfig('autoRefreshMs');
         if (!cfg || typeof cfg !== 'object') return false;
-        const brak = cfg.brakJednostek, poAt = cfg.poAtaku;
-        return (brak && brak.max > 0) || (poAt && poAt.max > 0);
+        const brak = cfg.brakJednostek, poAt = cfg.poAtaku, brakS = cfg.brakSurowcow;
+        return (brak && brak.max > 0) || (poAt && poAt.max > 0) || (brakS && brakS.max > 0);
     }
 
     function zaplanujRefresh(fromAutoStart, typ) {
         if (!fromAutoStart || getRuntimeConfig('autoRefreshWlaczony') === false) return 0;
         const cfg = getRuntimeConfig('autoRefreshMs');
         if (!cfg || typeof cfg !== 'object') return 0;
-        const ref = typ === 'poAtaku' ? cfg.poAtaku : cfg.brakJednostek;
+        const ref = typ === 'poAtaku' ? cfg.poAtaku : (typ === 'brakSurowcow' ? cfg.brakSurowcow : cfg.brakJednostek);
         if (!ref || ref.max <= 0) return 0;
         const ms = losowyCzasMs(ref);
-        log('Zaplanowano odświeżenie strony za ' + Math.round(ms / 1000) + ' s (' + (typ === 'poAtaku' ? 'po ataku' : 'brak jednostek') + ')');
+        const typNazwy = { poAtaku: 'po ataku', brakJednostek: 'brak jednostek', brakSurowcow: 'brak wiosek z surowcami' };
+        log('Zaplanowano odświeżenie strony za ' + Math.round(ms / 1000) + ' s (' + (typNazwy[typ] || typ) + ')');
         setTimeout(() => {
             log('Odświeżanie strony...');
             location.reload();
@@ -321,14 +432,48 @@
         // Zbierz przyciski (mur + minSurowiec + limit kompozycji)
         const maxMurVal = getRuntimeConfig('maxMur');
         const minSurowiecCfg = getRuntimeConfig('minSurowiec');
-        const doKlikniecia = [];
-        for (let i = 0; i < przyciskiB.length && doKlikniecia.length < maxKompozycji; i++) {
-            const btn = przyciskiB[i];
-            if (maxMurVal > 0 && !sprawdzMur(i, maxMurVal)) continue;
-            if (!sprawdzMinSurowiec(btn, minSurowiecCfg)) continue;
-            doKlikniecia.push(btn);
+        const tryb = minSurowiecCfg?.tryb || 'scisly';
+        let doKlikniecia = [];
+        if (tryb === 'najwiecej' && minSurowiecCfg?.wlaczony) {
+            // Tryb "najwięcej" – sortuj wg. bliskości do ustawionych wartości (najbogatsze pierwsze)
+            const kandydujace = [];
+            for (let i = 0; i < przyciskiB.length; i++) {
+                const btn = przyciskiB[i];
+                if (maxMurVal > 0 && !sprawdzMur(i, maxMurVal)) continue;
+                kandydujace.push({ btn, score: scoreWioskiSurowce(btn, minSurowiecCfg) });
+            }
+            kandydujace.sort((a, b) => b.score - a.score);
+            for (let j = 0; j < kandydujace.length && doKlikniecia.length < maxKompozycji; j++) {
+                doKlikniecia.push(kandydujace[j].btn);
+            }
+        } else {
+            for (let i = 0; i < przyciskiB.length && doKlikniecia.length < maxKompozycji; i++) {
+                const btn = przyciskiB[i];
+                if (maxMurVal > 0 && !sprawdzMur(i, maxMurVal)) continue;
+                if (!sprawdzMinSurowiec(btn, minSurowiecCfg)) continue;
+                doKlikniecia.push(btn);
+            }
+        }
+        // Tryb priorytetowy: jeśli 0 wiosek z surowcami, wyślij do wszystkich (jak bez filtra)
+        if (doKlikniecia.length === 0 && minSurowiecCfg?.wlaczony && tryb === 'priorytetowy') {
+            const cfgBezSurowcow = { ...minSurowiecCfg, wlaczony: false };
+            for (let i = 0; i < przyciskiB.length && doKlikniecia.length < maxKompozycji; i++) {
+                const btn = przyciskiB[i];
+                if (maxMurVal > 0 && !sprawdzMur(i, maxMurVal)) continue;
+                if (!sprawdzMinSurowiec(btn, cfgBezSurowcow)) continue;
+                doKlikniecia.push(btn);
+            }
+        }
+        // Brak wiosek spełniających filtry (tryb ścisły) – error + odświeżenie
+        if (doKlikniecia.length === 0 && minSurowiecCfg?.wlaczony && tryb === 'scisly') {
+            const ms = zaplanujRefresh(fromAutoStart, 'brakSurowcow');
+            const refreshMsg = ms > 0 ? ' Odświeżenie za ' + Math.round(ms / 1000) + ' s...' : '';
+            pokazKomunikat('Brak wiosek z wymaganymi surowcami.' + refreshMsg, 'error');
+            log('Brak wiosek spełniających filtr surowców – zaplanowano odświeżenie');
+            return;
         }
 
+        const minSurowiecCfgForDebug = getRuntimeConfig('minSurowiec');
         doKlikniecia.forEach((btn, i) => {
             setTimeout(() => {
                 const jeszczeMoge = ileKompozycjiMogeWyslac();
@@ -337,6 +482,16 @@
                     return;
                 }
                 try {
+                    if (DEBUG) {
+                        const info = pobierzInfoWioski(btn);
+                        const s = info.surowce ? `drewno: ${info.surowce.wood}, glina: ${info.surowce.clay}, żelazo: ${info.surowce.iron}` : '?';
+                        const coordsStr = info.coords ? `(${info.coords.x}|${info.coords.y})` : '?';
+                        const distStr = info.odleglosc != null ? info.odleglosc + ' pól' : '?';
+                        const cfgStr = minSurowiecCfgForDebug?.wlaczony
+                            ? `min. drewno: ${minSurowiecCfgForDebug.wood || 0}, glina: ${minSurowiecCfgForDebug.clay || 0}, żelazo: ${minSurowiecCfgForDebug.iron || 0} [tryb: ${minSurowiecCfgForDebug.tryb || 'scisly'}]`
+                            : 'brak';
+                        log('[DEBUG] Atak na wioskę: ' + info.nazwa + ' ' + coordsStr + ' | surowce: ' + s + ' | odległość: ' + distStr + ' | config: ' + cfgStr);
+                    }
                     btn.click();
                     log('Kliknięto atak B #' + (i + 1) + '/' + doKlikniecia.length + ' (dostępnych kompozycji: ' + jeszczeMoge + ')');
                 } catch (e) {
@@ -388,6 +543,7 @@
                     <div class="am-gui-tab-panel" id="am-gui-panel-main">
                         <div class="am-gui-status" id="am-gui-status">Ładowanie...</div>
                         <div class="am-gui-jednostki" id="am-gui-jednostki"></div>
+                        <div class="am-gui-limity" id="am-gui-limity"></div>
                         <button type="button" class="am-gui-start" id="am-gui-start">▶ START</button>
                     </div>
                     <div class="am-gui-tab-panel am-gui-hidden" id="am-gui-panel-config"></div>
@@ -416,7 +572,7 @@
                 bottom: 20px;
                 right: 20px;
                 z-index: 99999;
-                width: 260px;
+                width: 300px;
                 background: linear-gradient(180deg, #3d2c1e 0%, #2a1f16 100%);
                 border: 2px solid #8b6914;
                 border-radius: 8px;
@@ -437,14 +593,14 @@
                 cursor: move;
                 user-select: none;
             }
-            .am-gui-header span:first-child { font-weight: bold; font-size: 14px; }
+            .am-gui-header span:first-child { font-weight: bold; font-size: 15px; }
             .am-gui-header-right {
                 display: flex;
                 align-items: center;
                 gap: 8px;
             }
             .am-gui-countdown {
-                font-size: 11px;
+                font-size: 15px !important;
                 color: #8b6914;
                 font-weight: normal;
                 padding: 2px 6px;
@@ -471,25 +627,55 @@
                 padding: 14px;
                 display: flex;
                 flex-direction: column;
-                gap: 12px;
+                gap: 8px;
             }
             .am-gui-tab-panels { display: flex; flex-direction: column; gap: 12px; }
             .am-gui-panel-main { display: flex; flex-direction: column; gap: 12px; }
             .am-gui-status {
-                font-size: 12px;
+                font-size: 13px;
                 color: #c4a35a;
                 min-height: 18px;
                 margin-bottom: 2px;
             }
             .am-gui-jednostki {
-                font-size: 11px;
+                font-size: 12px;
                 display: flex;
                 flex-direction: column;
-                gap: 4px;
                 line-height: 1.4;
+                margin-bottom: 8px;
             }
             .am-gui-unit-ok { color: #6b9c2e; }
             .am-gui-unit-brak { color: #c44; }
+            .am-gui-limity {
+                font-size: 13px;
+                color: #b8a070;
+                padding: 6px 8px;
+                background: rgba(0,0,0,0.2);
+                border-radius: 4px;
+                border-left: 3px solid rgba(139,105,20,0.5);
+                marign-bottom: 8px;
+            }
+            .am-gui-limity .am-gui-res-icon {
+                width: 14px;
+                height: 14px;
+                margin-right: 2px;
+                position: relative;
+                top: 5px;
+            }
+            .am-gui-limity .am-gui-res-item {
+                align-items: center;
+            }
+            .am-gui-limity .am-gui-wioski {
+                color: #8b6914;
+                font-weight: bold;
+                margin-left: 4px;
+                display: inline-block;
+            }
+            .am-gui-limity .am-gui-tryb {
+                color: #a08050;
+                display: inline-block;
+                margin-left: 4px;
+            }
             .am-gui-check {
                 font-size: 12px;
                 cursor: pointer;
@@ -500,6 +686,8 @@
             .am-gui-check input { cursor: pointer; }
             .am-gui-start {
                 padding: 10px 20px;
+                margin-top: 8px;
+                width: 100%;
                 background: linear-gradient(180deg, #4a7c23 0%, #2e5a14 100%);
                 border: 2px solid #6b9c2e;
                 color: #fff;
@@ -549,7 +737,7 @@
             .am-gui-tabs { display: none; gap: 6px; margin-bottom: 10px; }
             .am-gui-tabs.visible { display: flex; }
             .am-gui-tab {
-                flex: 1; padding: 6px 8px; font-size: 11px;
+                flex: 1; padding: 6px 8px; font-size: 13px;
                 background: rgba(0,0,0,0.3); border: 1px solid #8b6914;
                 color: #e8d5b5; cursor: pointer; border-radius: 4px;
             }
@@ -557,7 +745,7 @@
             .am-gui-tab.active { background: rgba(139,105,20,0.5); font-weight: bold; }
             .am-gui-tab-panel.am-gui-hidden { display: none !important; }
             #am-gui-panel-config {
-                max-height: 400px;
+                max-height: 800px;
                 overflow-y: auto;
                 display: flex;
                 flex-direction: column;
@@ -610,19 +798,20 @@
                 margin: 4px 0; font-size: 11px; gap: 8px;
             }
             .am-gui-input-num { width: 68px; padding: 4px 6px; background: #2a1f16; border: 1px solid #8b6914; color: #e8d5b5; border-radius: 4px; flex-shrink: 0; }
-            .am-gui-config-row select { min-width: 90px; }
+            .am-gui-config-row select { min-width: 200px; padding: 4px 6px; background: #2a1f16; border: 1px solid #8b6914; color: #e8d5b5; border-radius: 4px; }
             .am-gui-zapisz {
                 margin-top: 6px;
+                width: 100%;
                 padding: 8px 14px;
-                background: linear-gradient(180deg, #4a5a2e 0%, #3a4a1e 100%);
-                border: 1px solid #8b6914;
+                background: linear-gradient(180deg, #4a7c23 0%, #2e5a14 100%);
+                border: 1px solid #6b9c2e;;
                 color: #e8d5b5;
                 font-size: 12px;
                 border-radius: 6px;
                 cursor: pointer;
                 align-self: flex-start;
             }
-            .am-gui-zapisz:hover { background: linear-gradient(180deg, #5a6a3e 0%, #4a5a2e 100%); }
+            .am-gui-zapisz:hover { background: linear-gradient(180deg, #5a8c33 0%, #3e6a24 100%);; }
         `;
         document.head.appendChild(style);
         document.body.appendChild(panel);
@@ -660,6 +849,30 @@
                     html += `<div class="${cls}">${nazwa}: ${ileKompozycji} (${mam}/${naAtak})</div>`;
                 }
                 jednostkiEl.innerHTML = html || '<div style="color:#888">Brak wymaganych jednostek w configu</div>';
+            }
+            // Min. surowce we wioskach + tryb + liczba wiosek spełniających filtry
+            const limityEl = document.getElementById('am-gui-limity');
+            if (limityEl) {
+                const minS = getRuntimeConfig('minSurowiec');
+                const tryb = minS?.tryb || 'scisly';
+                const trybNazwy = { scisly: 'Ścisły', priorytetowy: 'Priorytetowy', najwiecej: 'Najwięcej' };
+                const trybLabel = minS?.wlaczony ? ` <span class="am-gui-tryb">[tryb: ${trybNazwy[tryb] || tryb}]</span>` : '';
+                const htmlContent = formatMinSurowiecHtml(minS);
+                const filtry = ileWiosekPasujeDoFiltrow();
+                const wioskiInfo = filtry.total > 0 ? ` <span class="am-gui-wioski">(${filtry.count}/${filtry.total} wiosek)</span>` : '';
+                if (htmlContent) {
+                    limityEl.innerHTML = '📦 <strong>Min. surowce we wioskach:</strong> ' + htmlContent + trybLabel + wioskiInfo;
+                    limityEl.style.display = '';
+                } else {
+                    const maxMur = getRuntimeConfig('maxMur');
+                    const maFiltry = maxMur > 0;
+                    if (maFiltry) {
+                        limityEl.innerHTML = '📦 <strong>Filtry:</strong> max mur ' + maxMur + (minS?.wlaczony ? trybLabel : '') + wioskiInfo;
+                    } else {
+                        limityEl.innerHTML = '📦 <strong>Min. surowce we wioskach:</strong> <span style="color:#888">wyłączone</span>' + trybLabel + (filtry.total > 0 ? wioskiInfo : '');
+                    }
+                    limityEl.style.display = '';
+                }
             }
         }
         odswiezStatus();
@@ -700,11 +913,11 @@
                 <div class="am-gui-config-section">
                     <label class="am-gui-check"><input type="checkbox" id="am-gui-autostart" ${layout.autoStart ? 'checked' : ''}> Auto-start przy załadowaniu</label>
                     <label class="am-gui-check"><input type="checkbox" id="am-gui-autorefresh" ${layout.autoRefreshWlaczony !== false ? 'checked' : ''}> Auto-refresh (losowo)</label>
+                    <label class="am-gui-check"><input type="checkbox" id="am-gui-pokaz" ${layout.pokazKomunikat ? 'checked' : ''}> Pokaż komunikaty</label>
                 </div>
                 <div class="am-gui-config-section">
                     <label class="am-gui-config-row"><span>Max mur (0=wył.):</span><input type="number" id="am-gui-maxmur" min="0" value="${layout.maxMur || 0}" class="am-gui-input-num"></label>
                     <label class="am-gui-config-row"><span>Opóźnienie klik (ms):</span><input type="number" id="am-gui-klik" min="100" value="${layout.klikOpóznienie || 400}" class="am-gui-input-num"></label>
-                    <label class="am-gui-check"><input type="checkbox" id="am-gui-pokaz" ${layout.pokazKomunikat ? 'checked' : ''}> Pokaż komunikaty</label>
                 </div>
                 <details class="am-gui-config-details" open>
                     <summary>⚔️ Jednostki na atak</summary>
@@ -718,6 +931,9 @@
                         <strong>Brak jednostek</strong>
                         <label class="am-gui-config-row"><span>Min:</span><input type="number" id="am-gui-ar-brak-min" min="0" value="${arBra.min || 60000}" class="am-gui-input-num"></label>
                         <label class="am-gui-config-row"><span>Max:</span><input type="number" id="am-gui-ar-brak-max" min="0" value="${arBra.max || 300000}" class="am-gui-input-num"></label>
+                        <strong>Brak wiosek z surowcami</strong>
+                        <label class="am-gui-config-row"><span>Min:</span><input type="number" id="am-gui-ar-braksurowcow-min" min="0" value="${(arMs.brakSurowcow || {}).min || 60000}" class="am-gui-input-num"></label>
+                        <label class="am-gui-config-row"><span>Max:</span><input type="number" id="am-gui-ar-braksurowcow-max" min="0" value="${(arMs.brakSurowcow || {}).max || 300000}" class="am-gui-input-num"></label>
                         <strong>Po ataku</strong>
                         <label class="am-gui-config-row"><span>Min:</span><input type="number" id="am-gui-ar-po-min" min="0" value="${arPo.min || 30000}" class="am-gui-input-num"></label>
                         <label class="am-gui-config-row"><span>Max:</span><input type="number" id="am-gui-ar-po-max" min="0" value="${arPo.max || 160000}" class="am-gui-input-num"></label>
@@ -727,6 +943,13 @@
                     <summary>📦 Min. surowiec (filtr wiosek)</summary>
                     <div class="am-gui-config-details-inner">
                         <label class="am-gui-check"><input type="checkbox" id="am-gui-minsurowiec-wlacz" ${(layout.minSurowiec?.wlaczony) ? 'checked' : ''}> Włącz filtr</label>
+                        <label class="am-gui-config-row"><span>Tryb:</span>
+                            <select id="am-gui-minsurowiec-tryb">
+                                <option value="scisly" ${(layout.minSurowiec?.tryb || 'scisly') === 'scisly' ? 'selected' : ''}>Ścisły – tylko wioski z surowcami</option>
+                                <option value="priorytetowy" ${layout.minSurowiec?.tryb === 'priorytetowy' ? 'selected' : ''}>Priorytetowy – brak surowców = wysyłaj do wszystkich</option>
+                                <option value="najwiecej" ${layout.minSurowiec?.tryb === 'najwiecej' ? 'selected' : ''}>Najwięcej – atakuj najbogatsze (najbliższe ustawionym wartościom)</option>
+                            </select>
+                        </label>
                         <label class="am-gui-config-row"><span>Drewno:</span><input type="number" id="am-gui-minsurowiec-wood" min="0" value="${layout.minSurowiec?.wood ?? 1000}" class="am-gui-input-num"></label>
                         <label class="am-gui-config-row"><span>Glina:</span><input type="number" id="am-gui-minsurowiec-clay" min="0" value="${layout.minSurowiec?.clay ?? 0}" class="am-gui-input-num"></label>
                         <label class="am-gui-config-row"><span>Żelazo:</span><input type="number" id="am-gui-minsurowiec-iron" min="0" value="${layout.minSurowiec?.iron ?? 0}" class="am-gui-input-num"></label>
@@ -754,13 +977,16 @@
                 l.maxMur = parseInt(document.getElementById('am-gui-maxmur')?.value || '0', 10) || 0;
                 l.minSurowiec = {
                     wlaczony: document.getElementById('am-gui-minsurowiec-wlacz')?.checked === true,
+                    tryb: document.getElementById('am-gui-minsurowiec-tryb')?.value || 'scisly',
                     wood: parseInt(document.getElementById('am-gui-minsurowiec-wood')?.value || '1000', 10) || 0,
                     clay: parseInt(document.getElementById('am-gui-minsurowiec-clay')?.value || '0', 10) || 0,
                     iron: parseInt(document.getElementById('am-gui-minsurowiec-iron')?.value || '0', 10) || 0
                 };
                 l.klikOpóznienie = Math.max(100, parseInt(document.getElementById('am-gui-klik')?.value || '400', 10)) || 400;
+                const arBs = { min: parseInt(document.getElementById('am-gui-ar-braksurowcow-min')?.value || '60000', 10) || 60000, max: parseInt(document.getElementById('am-gui-ar-braksurowcow-max')?.value || '300000', 10) || 300000 };
                 l.autoRefreshMs = {
                     brakJednostek: { min: parseInt(document.getElementById('am-gui-ar-brak-min')?.value || '60000', 10) || 60000, max: parseInt(document.getElementById('am-gui-ar-brak-max')?.value || '300000', 10) || 300000 },
+                    brakSurowcow: arBs,
                     poAtaku: { min: parseInt(document.getElementById('am-gui-ar-po-min')?.value || '30000', 10) || 30000, max: parseInt(document.getElementById('am-gui-ar-po-max')?.value || '160000', 10) || 160000 }
                 };
                 l.pokazKomunikat = document.getElementById('am-gui-pokaz')?.checked !== false;
